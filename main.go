@@ -2,11 +2,19 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"strings"
 	"sync"
+	"time"
+)
+
+var (
+	ipMap     = make(map[string]struct{})
+	ipMapLock sync.Mutex
+	counter   int
 )
 
 func main() {
@@ -20,50 +28,49 @@ func main() {
 		return
 	}
 
-	fmt.Print("Thread count (e.g. 100-500): ")
+	fmt.Print("Thread count (100–500 recommended): ")
 	var threadCount int
 	fmt.Scanln(&threadCount)
 	if threadCount < 1 {
 		threadCount = 100
 	}
 
-	// Load existing IPs to avoid duplicates
-	existing := loadIPs("ips.txt")
-	ipChan := make(chan string, threadCount*2)
-	var resultLock sync.Mutex
-	var results []string
+	ipMap = loadIPs("ips.txt")
 
 	var wg sync.WaitGroup
+	domainChan := make(chan string, threadCount*2)
 
-	// Worker pool
+	// Start workers
 	for i := 0; i < threadCount; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for domain := range ipChan {
-				ip := resolve(domain)
+			for domain := range domainChan {
+				ip := resolveWithTimeout(domain, 5*time.Second)
 				if ip == "" {
 					continue
 				}
-				resultLock.Lock()
-				if _, ok := existing[ip]; !ok {
-					existing[ip] = struct{}{}
-					results = append(results, ip)
+
+				// Check + write immediately
+				ipMapLock.Lock()
+				if _, exists := ipMap[ip]; !exists {
+					ipMap[ip] = struct{}{}
+					appendIP(ip)
+					updateProgress()
 				}
-				resultLock.Unlock()
+				ipMapLock.Unlock()
 			}
 		}()
 	}
 
+	// Feed domains
 	for _, d := range domains {
-		ipChan <- d
+		domainChan <- d
 	}
-	close(ipChan)
-	wg.Wait()
+	close(domainChan)
 
-	// Final write (batch)
-	writeIPs("ips.txt", results)
-	fmt.Printf("Done. %d new IPs written.\n", len(results))
+	wg.Wait()
+	fmt.Println("✅ Done. All domains processed.")
 }
 
 func readDomains(path string) ([]string, error) {
@@ -93,6 +100,7 @@ func loadIPs(path string) map[string]struct{} {
 		return m
 	}
 	defer file.Close()
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		ip := strings.TrimSpace(scanner.Text())
@@ -103,31 +111,32 @@ func loadIPs(path string) map[string]struct{} {
 	return m
 }
 
-func writeIPs(path string, ips []string) {
-	if len(ips) == 0 {
-		return
-	}
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+func appendIP(ip string) {
+	f, err := os.OpenFile("ips.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		fmt.Println("Write error:", err)
 		return
 	}
-	defer file.Close()
+	defer f.Close()
 
-	for _, ip := range ips {
-		file.WriteString(ip + "\n")
+	_, _ = f.WriteString(ip + "\n")
+}
+
+func updateProgress() {
+	counter++
+	if counter%500 == 0 {
+		fmt.Printf("Resolved %d IPs so far...\n", counter)
 	}
 }
 
-func resolve(domain string) string {
-	ips, err := net.LookupIP(domain)
+func resolveWithTimeout(domain string, timeout time.Duration) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	resolver := &net.Resolver{}
+	ips, err := resolver.LookupIP(ctx, "ip4", domain)
 	if err != nil || len(ips) == 0 {
 		return ""
 	}
-	for _, ip := range ips {
-		if ip.To4() != nil {
-			return ip.String()
-		}
-	}
-	return ""
+	return ips[0].String()
 }
