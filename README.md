@@ -1,2 +1,2 @@
 # golang-iptools
-golangIPduck
+UltraFast golang domain to ip tool
