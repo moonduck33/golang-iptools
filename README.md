@@ -1,2 +1,2 @@
 # golang-iptools
-UltraFast golang domain to ip tool
+UltraFast golang IP/Domain tools
