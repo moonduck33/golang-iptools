@@ -2,5 +2,5 @@
 UltraFast golang IP/Domain tools
 
 Content:
-main.go >> golang domain to ip tool
-all.go >> IP ranger
+<p>main.go - golang domain to ip tool</p>
+<p> all.go - IP ranger </p>
